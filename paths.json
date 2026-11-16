@@ -1,9 +1,12 @@
 {
   "mappings": [
-    "/:/"
+    "/content/f29842/:/",
+    "/content/dam/f29842/:/assets/",
+    "/content/forms/af/f29842/:/forms/"
   ],
   "includes": [
-    "/content/",
-    "/content/dam/"
+    "/content/f29842/",
+    "/content/dam/f29842/",
+    "/content/forms/af/f29842/"
   ]
 }
