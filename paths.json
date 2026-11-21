@@ -2,11 +2,13 @@
   "mappings": [
     "/content/f29842/:/",
     "/content/dam/f29842/:/assets/",
-    "/content/forms/af/f29842/:/forms/"
+    "/content/forms/af/f29842/:/forms/",
+    "/content/forms/af/eds-email-test:/forms/eds-email-test"
   ],
   "includes": [
     "/content/f29842/",
     "/content/dam/f29842/",
-    "/content/forms/af/f29842/"
+    "/content/forms/af/f29842/",
+    "/content/forms/af/eds-email-test"
   ]
 }
