@@ -1,8 +1,6 @@
 import { createOptimizedPicture, loadCSS } from '../../scripts/aem.js';
 import transferRepeatableDOM, { insertAddButton, insertRemoveButton } from './components/repeat/repeat.js';
-import {
-  emailPattern, getSubmitBaseUrl, SUBMISSION_SERVICE, SUPPORTED_SUBMISSION_ACTION_TYPES,
-} from './constant.js';
+import { emailPattern, getSubmitBaseUrl, SUBMISSION_SERVICE } from './constant.js';
 import GoogleReCaptcha from './integrations/recaptcha.js';
 import componentDecorator from './mappings.js';
 import { handleSubmit } from './submit.js';
@@ -362,10 +360,7 @@ export async function createForm(formDef, data, source = 'aem') {
     captcha.loadCaptcha(form);
   }
 
-  // Only enable DOM validation for doc-based forms; edge forms use the model.
-  if (source === 'sheet') {
-    enableValidation(form);
-  }
+  enableValidation(form);
   transferRepeatableDOM(form, formDef, form, formId);
 
   if (afModule && typeof Worker === 'undefined') {
@@ -375,8 +370,7 @@ export async function createForm(formDef, data, source = 'aem') {
   }
 
   form.addEventListener('reset', async () => {
-    const currentSource = form.dataset.source || 'aem';
-    const response = await createForm(formDef, undefined, currentSource);
+    const response = await createForm(formDef);
     if (response?.form) {
       document.querySelector(`[data-action="${form?.dataset?.action}"]`)?.replaceWith(response?.form);
     }
@@ -513,63 +507,6 @@ function loadFormCustomStyles(formDef) {
   }
 }
 
-function shouldRouteToSubmissionService(actionType) {
-  return SUPPORTED_SUBMISSION_ACTION_TYPES.includes(actionType);
-}
-
-async function setupForm(formDef, { pathname, block, editMode = false } = {}) {
-  const submitProps = formDef?.properties?.['fd:submit'];
-  const actionType = submitProps?.actionName || formDef?.properties?.actionType;
-  if (shouldRouteToSubmissionService(actionType)) {
-    // Check if we're in an iframe and use parent window path if available
-    const iframePath = window.frameElement ? window.parent.location.pathname
-      : window.location.pathname;
-    formDef.action = SUBMISSION_SERVICE + btoa(pathname || iframePath);
-  } else {
-    formDef.action = getSubmitBaseUrl() + (formDef.action || '');
-  }
-
-  let def = formDef;
-  let form;
-  let afbForm;
-
-  if (isDocumentBasedForm(formDef)) {
-    def = new DocBasedFormToAF().transform(formDef, { block });
-    loadFormCustomStyles(def);
-    form = (await createForm(def, null, 'sheet'))?.form;
-    const docRuleEngine = await import('./rules-doc/index.js');
-    docRuleEngine.default(def, form);
-    form.dataset.source = 'sheet';
-    form.dataset.rules = false;
-  } else {
-    loadFormCustomStyles(formDef);
-    afModule = await import('./rules/index.js');
-    addRequestContextToForm(formDef);
-    if (afModule && afModule.initAdaptiveForm && !editMode) {
-      ({ form, afbForm } = await afModule.initAdaptiveForm(formDef, createForm));
-    } else {
-      form = await createFormForAuthoring(formDef);
-    }
-    form.dataset.source = 'aem';
-    form.dataset.rules = true;
-    if (def.properties && def.properties['fd:path']) {
-      form.dataset.formpath = def.properties['fd:path'];
-    }
-  }
-
-  form.dataset.redirectUrl = def.redirectUrl || '';
-  form.dataset.thankYouMsg = def.thankYouMsg || '';
-  form.dataset.action = def.action || pathname?.split('.json')[0];
-  form.dataset.id = def.id;
-  return { form, afbForm };
-}
-
-export async function renderForm(formDef, element) {
-  const { form, afbForm } = await setupForm(formDef);
-  element.appendChild(form);
-  return { form, afbForm };
-}
-
 export default async function decorate(block) {
   let container = block.querySelector('a[href]');
   let formDef;
@@ -580,15 +517,52 @@ export default async function decorate(block) {
   } else {
     ({ container, formDef } = extractFormDefinition(block));
   }
+  let source = 'aem';
+  let rules = true;
   let form;
-  let afbForm;
   if (formDef) {
-    ({ form, afbForm } = await setupForm(formDef, {
-      pathname,
-      block,
-      editMode: block.classList.contains('edit-mode'),
-    }));
+    const submitProps = formDef?.properties?.['fd:submit'];
+    const actionType = submitProps?.actionName || formDef?.properties?.actionType;
+    const spreadsheetUrl = submitProps?.spreadsheet?.spreadsheetUrl
+      || formDef?.properties?.spreadsheetUrl;
+
+    if (actionType === 'spreadsheet' && spreadsheetUrl) {
+      // Check if we're in an iframe and use parent window path if available
+      const iframePath = window.frameElement ? window.parent.location.pathname
+        : window.location.pathname;
+      formDef.action = SUBMISSION_SERVICE + btoa(pathname || iframePath);
+    } else {
+      formDef.action = getSubmitBaseUrl() + (formDef.action || '');
+    }
+    if (isDocumentBasedForm(formDef)) {
+      const transform = new DocBasedFormToAF();
+      formDef = transform.transform(formDef, { block });
+      source = 'sheet';
+      loadFormCustomStyles(formDef);
+      const response = await createForm(formDef, null, source);
+      form = response?.form;
+      const docRuleEngine = await import('./rules-doc/index.js');
+      docRuleEngine.default(formDef, form);
+      rules = false;
+    } else {
+      loadFormCustomStyles(formDef);
+      afModule = await import('./rules/index.js');
+      addRequestContextToForm(formDef);
+      if (afModule && afModule.initAdaptiveForm && !block.classList.contains('edit-mode')) {
+        form = await afModule.initAdaptiveForm(formDef, createForm);
+      } else {
+        form = await createFormForAuthoring(formDef);
+      }
+    }
+    form.dataset.redirectUrl = formDef.redirectUrl || '';
+    form.dataset.thankYouMsg = formDef.thankYouMsg || '';
+    form.dataset.action = formDef.action || pathname?.split('.json')[0];
+    form.dataset.source = source;
+    form.dataset.rules = rules;
+    form.dataset.id = formDef.id;
+    if (source === 'aem' && formDef.properties && formDef.properties['fd:path']) {
+      form.dataset.formpath = formDef.properties['fd:path'];
+    }
     container.replaceWith(form);
   }
-  return { form, afbForm };
 }

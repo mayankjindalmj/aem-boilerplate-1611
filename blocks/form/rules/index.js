@@ -64,7 +64,7 @@ function handleActiveChild(id, form) {
   }
 }
 
-export async function fieldChanged(payload, form, generateFormRendition) {
+async function fieldChanged(payload, form, generateFormRendition) {
   const { changes, field: fieldModel } = payload;
   const {
     id, name, fieldType, ':type': componentType, readOnly, type, displayValue, displayFormat, displayValueExpression,
@@ -99,36 +99,10 @@ export async function fieldChanged(payload, form, generateFormRendition) {
       case 'validationMessage':
         {
           const { validity } = payload.field;
-
-          // TODO: File inputs use DOM-based validation for file-specific constraints
-          // (accept, maxFileSize, minItems, maxItems) in file.js fileValidation().
-          // Worker still handles standard constraints like 'required' for file inputs.
-          // Skip worker validation ONLY if it's a file-specific validity state.
-          if (field.type === 'file' && validity && (
-            validity.acceptMismatch
-            || validity.fileSizeMismatch
-            || validity.minItemsMismatch
-            || validity.maxItemsMismatch
-          )) {
-            // File component handles file-specific validation, skip worker message
-            break;
-          }
-
-          if (field.setCustomValidity) {
-            if (currentValue && validity && validity.valid === false) {
-              field.setCustomValidity(currentValue);
-              updateOrCreateInvalidMsg(field, currentValue);
-            } else if (!currentValue) {
-              // Model says field is valid; clear DOM validation state
-              // For file inputs, only clear if there's no custom validity already set
-              // (file component may have set file-specific validation errors)
-              if (field.type === 'file' && field.validationMessage) {
-                // File component has validation error, don't override
-                break;
-              }
-              field.setCustomValidity('');
-              updateOrCreateInvalidMsg(field, '');
-            }
+          if (field.setCustomValidity
+            && (validity?.expressionMismatch || validity?.customConstraint)) {
+            field.setCustomValidity(currentValue);
+            updateOrCreateInvalidMsg(field, currentValue);
           }
         }
         break;
@@ -141,13 +115,7 @@ export async function fieldChanged(payload, form, generateFormRendition) {
           field.setAttribute('edit-value', valueToSet);
           field.setAttribute('display-value', displayValue);
           if (document.activeElement !== field) {
-            // Native date/number inputs reject formatted text and clear themselves,
-            // so only write displayValue while the input is in its text (display) mode.
-            if (field.type === 'text') {
-              field.value = displayValue;
-            } else if (field.value !== String(valueToSet)) {
-              field.value = valueToSet;
-            }
+            field.value = displayValue;
           }
         } else if (fieldType === 'radio-group' || fieldType === 'checkbox-group') {
           field.querySelectorAll(`input[name=${id}_${name}]`).forEach((el) => {
@@ -257,13 +225,6 @@ export async function fieldChanged(payload, form, generateFormRendition) {
           if (field.validity?.customError) {
             field?.setCustomValidity('');
           }
-        } else if (currentValue === false) {
-          // Field is invalid, display the model's validation message
-          const validationMessage = fieldModel.validationMessage || fieldModel.errorMessage;
-          if (validationMessage) {
-            field?.setCustomValidity(validationMessage);
-            updateOrCreateInvalidMsg(field, validationMessage);
-          }
         }
         break;
       case 'enum':
@@ -321,7 +282,7 @@ function applyRuleEngine(htmlForm, form, captcha) {
     } else if (field.type === 'checkbox') {
       form.getElement(id).value = checked ? value : field.dataset.uncheckedValue;
     } else if (field.type === 'file') {
-      form.getElement(id).value = Array.from(e?.detail?.files || field.files || []);
+      form.getElement(id).value = Array.from(e?.detail?.files || field.files);
     } else {
       form.getElement(id).value = value;
     }
@@ -396,7 +357,7 @@ function applyFieldChangeToFormModel(form, payload, onlyNotifyView = false) {
 }
 
 export async function loadRuleEngine(formDef, htmlForm, captcha, genFormRendition, data) {
-  const ruleEngine = await import('./model/afb-runtime.min.js');
+  const ruleEngine = await import('./model/afb-runtime.js');
   const form = ruleEngine.restoreFormInstance(formDef, data, { logLevel: LOG_LEVEL });
   window.myForm = form;
   formModels[htmlForm.dataset?.id] = form;
@@ -444,24 +405,10 @@ async function initializeRuleEngineWorker(formDef, renderHTMLForm) {
     // No worker: fetch prefill only when enabled (worker path does the same in RuleEngineWorker.js)
     const needsPrefill = formDef?.properties?.['fd:formDataEnabled'] === true;
     const data = needsPrefill ? await fetchData(formDef?.id, window.location.search || '') : null;
-    const ruleEngine = await import('./model/afb-runtime.min.js');
+    const ruleEngine = await import('./model/afb-runtime.js');
     const formDefWithData = { ...formDef, ...(data != null && { data }) };
-    const afbForm = ruleEngine.createFormInstance(formDefWithData, undefined, LOG_LEVEL);
-    const formState = afbForm.getState(true);
-    const response = await renderHTMLForm(formState, data);
-    if (response?.form) {
-      // Wire DOM events to the model, same as the worker path does after restoreState.
-      // dataset.id must be set before loadRuleEngine keys into formModels.
-      response.form.dataset.id = formDef.id;
-      await loadRuleEngine(
-        formState,
-        response.form,
-        response.captcha,
-        response.generateFormRendition,
-        data,
-      );
-    }
-    return { ...response, afbForm: formModels[formDef.id] ?? afbForm };
+    const form = ruleEngine.createFormInstance(formDefWithData, undefined, LOG_LEVEL);
+    return renderHTMLForm(form.getState(true), data);
   }
   const myWorker = new Worker(`${window.hlx.codeBasePath}/blocks/form/rules/RuleEngineWorker.js`, { type: 'module' });
   // Pass the current URL to the worker for log level determination
@@ -495,7 +442,7 @@ async function initializeRuleEngineWorker(formDef, renderHTMLForm) {
         myWorker.postMessage({
           name: 'decorated',
         });
-        resolve({ ...response, afbForm: null });
+        resolve(response);
       }
 
       if (e.data.name === 'restoreState') {
@@ -548,7 +495,7 @@ export async function initAdaptiveForm(formDef, createForm) {
   preloadFunctionScripts(formDef?.properties?.customFunctionsPath, window.hlx?.codeBasePath);
   await registerCustomFunctions(formDef?.properties?.customFunctionsPath || '/blocks/form/functions.js', window.hlx?.codeBasePath);
   const response = await initializeRuleEngineWorker(formDef, createForm);
-  return { form: response?.form, afbForm: response?.afbForm };
+  return response?.form;
 }
 
 /**
