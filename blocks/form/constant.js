@@ -63,7 +63,7 @@ export const defaultErrorMessages = {
   required: 'Please fill in this field.',
 };
 
-let submitBaseUrl = '';
+let submitBaseUrl = 'https://publish-p124863-e2401852.adobeaemcloud.com';
 
 export const SUBMISSION_SERVICE = 'https://forms.adobe.com/adobe/forms/af/submit/';
 
